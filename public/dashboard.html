@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+        }
+         /* Basic table styling */
+         table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: Arial, sans-serif;
+        }
+
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+
+        /* Special attention to the header */
+        th:first-child {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        /* Hover effect on rows */
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+
+        /* Center the thumbnail image */
+        td img {
+            display: block;
+            margin: 0 auto;
+            max-width: 50px;
+            max-height: 50px;
+        }
+    </style>
+</head>
+<body>
+    <div class="authenticated-page" id="authenticated-page">
+        <h2>Welcome, User!</h2>
+        <p>This is the authenticated page content.</p>
+        <button id="logout-button">Logout</button>
+    </div>
+
+    <div id="product-list"></div>
+
+    <script src="script.js"></script>
+
+    <script>
+        if (!isAuthenticated) {
+          location.href='index.html';
+        }
+
+        getProducts();
+    </script>
+</body>
+</html>
