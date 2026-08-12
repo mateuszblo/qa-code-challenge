@@ -2,7 +2,8 @@
 
 Playwright end-to-end suite for the QA code assessment app.
 
-- **[QA_ASSESSMENT_REPORT.md](../QA_ASSESSMENT_REPORT.md)** - the QA deliverable: every bug found, its severity, evidence, and how to reproduce it by hand. §5 lists the test-case catalogue (the five automated cases below, plus the recommended additional coverage).
+- **[QA_ASSESSMENT_REPORT.md](../QA_ASSESSMENT_REPORT.md)** - the QA deliverable: every bug found, its severity, evidence, and how to reproduce it by hand. §5 lists the test-case catalogue (the five automated cases below) and the reasoning behind the suite's non-obvious choices.
+- **[APPENDIX.md](../APPENDIX.md)** - low-severity findings, the OWASP Top 10:2025 mapping, and [eleven further regression tests](../APPENDIX.md#c-recommended-additional-test-coverage) worth adding.
 
 ## Quick start
 

@@ -2,8 +2,18 @@
 
 **Project:** QA Code Challenge - login + secure product dashboard
 **Assessed:** 11 August 2026
-**Environment:** Node/Express (`src/`), vanilla JS frontend (`public/`), downstream service `dummyjson.com`
-**Method:** Static code review + live black-box verification in Chrome (DevTools MCP: Network, Console, `localStorage` inspection) + Lighthouse accessibility/best-practice audits + OWASP-guided security review (dependency audit, brute-force, injection, transport) + direct API probing with `curl`/Node.
+**Environment:** Node/Express (`src/`), vanilla JS frontend (`public/`), third-party API `dummyjson.com` (the brief's "downstream service")
+**Method:** Static code review + live black-box verification in Chrome (DevTools MCP: Network, Console, a11y tree, `localStorage` inspection) + Lighthouse accessibility/best-practice audits + a category-by-category review against the **OWASP Top 10:2025** (released January 2026) + direct API probing with `curl`/Node. Every browser-dependent finding was re-driven through the real UI in a final pass ([Appendix D](APPENDIX.md#d-verification-method)).
+
+### Where to find each deliverable
+
+| Brief asks for | Location |
+|---|---|
+| **1.** Detailed report of flaws & security concerns, prioritised | §1 summary · §3 findings (H/M) · [Appendix A](APPENDIX.md#a-low-severity-findings) (L) · §4 remediation order |
+| **2.** Automated test cases + README | §5, with the suite in [`tests/`](tests/) and run instructions in [`tests/README.md`](tests/README.md) |
+| **3.** Observations & suggestions | §6 |
+
+**In 90 seconds:** the app is down (§1). One anonymous request kills the server (H1/H9), the "secure" page has no server-side auth (H2/H3), and login never truly worked even when it appeared to (H4). Fix order and rationale in §4.
 
 ---
 
@@ -20,26 +30,26 @@ Behind that single symptom sit **three independent defects**, each sufficient to
 | # | Defect | Effect |
 |---|--------|--------|
 | 1 | Unhandled promise rejection in `/login` | **Server process dies** on any failed login |
-| 2 | README credentials no longer valid upstream | Every documented login attempt fails |
+| 2 | README credentials no longer valid at dummyJSON | Every documented login attempt fails |
 | 3 | Frontend reads `userData.token`; API returns `accessToken` | Stores the string `"undefined"` as the auth token |
 
 Separately, the "secure" area is **not secure**: the product endpoint requires no authentication, and the client-side auth gate is bypassed by typing one line into the browser console.
 
-**Verdict:** not production-ready. Eight High-severity issues (one unauthenticated denial-of-service, one authentication bypass, one logout bypass, one critical dependency advisory) require fixing before release.
+**Verdict:** not production-ready. Nine High-severity issues (one unauthenticated denial-of-service, one authentication bypass, one logout bypass, one critical dependency advisory) require fixing before release. Measured against the **OWASP Top 10:2025**, the application has confirmed findings in **9 of the 10 categories** ([Appendix B](APPENDIX.md#b-owasp-top-102025-coverage)).
 
 ### Severity summary
 
 | Priority | Count | Issues |
 |---|---|---|
-| 🔴 **High** | 8 | H1 DoS crash · H2 auth bypass · H3 unprotected API · H4 broken token contract · H5 vulnerable dependencies (1 critical, 4 high) · H6 no brute-force protection · **H7 logout bypassable via back button** · **H8 third-party PII exposed unauthenticated** |
-| 🟠 **Medium** | 8 | M1 stale credentials · M2 XSS sink · M3 stack-trace leak · M4 85% data loss · M5 token in `localStorage` · M6 credentials over plain HTTP · **M7 unauthenticated fetch fires despite redirect** · **M8 `npm test` broken; CWD-relative static path** |
+| 🔴 **High** | 9 | H1 DoS crash · H2 auth bypass · H3 unprotected API · H4 broken token contract · H5 vulnerable dependencies (1 critical, 4 high) · H6 no brute-force protection · **H7 logout bypassable via back button** · **H8 third-party PII exposed unauthenticated** · **H9 crash reachable with no credentials at all** |
+| 🟠 **Medium** | 9 | M1 stale credentials · M2 XSS sink · M3 stack-trace leak · M4 85% data loss · M5 token in `localStorage` · M6 credentials over plain HTTP · **M7 unauthenticated fetch fires despite redirect** · **M8 `npm test` broken; CWD-relative static path** · **M9 no security logging or alerting** |
 | 🟡 **Low** | 8 | L1 wildcard CORS · L2 misleading errors · L3 no loading/empty states · L4 hardcoded creds in HTML · L5 dead code · L6 missing security headers · L7 accessibility defects (measured) · **L8 no `autocomplete` on login inputs** |
 
 ---
 
 ## 2. Root cause analysis - why login is broken
 
-I traced the failure end-to-end rather than stopping at the first plausible explanation. The chain has three links.
+The failure was traced end-to-end rather than stopping at the first plausible explanation. The chain has three links.
 
 ### The reproduction
 
@@ -83,7 +93,7 @@ A **single unauthenticated HTTP request with a wrong password takes the whole se
 
 ### Link 2 - the credentials are dead
 
-The README's users are rejected by the live downstream service:
+The README's users are rejected by the live dummyJSON service:
 
 | Credentials (source) | Result |
 |---|---|
@@ -93,7 +103,7 @@ The README's users are rejected by the live downstream service:
 
 dummyJSON reset its user dataset; the README was never updated. So the documented happy path **always** triggers the crash in Link 1 - which is why the app appears completely dead rather than merely showing a login error.
 
-> **A note on method.** My first hypothesis was that `body-parser`'s default export is `urlencoded`, leaving `req.body` empty - the 400 message `"Username and password required"` fits that theory perfectly. I tested it instead of trusting it, and **it was wrong**: `req.body` parses correctly, and both `JSON.stringify(obj)` and a plain object return **200** from the upstream API. The 400 is caused purely by invalid credentials. That distinction matters - acting on the plausible-but-wrong theory would have meant rewriting working request-serialization code while leaving the real bug untouched.
+> **Discounted hypothesis.** A plausible alternative explanation - that `body-parser`'s default export is `urlencoded`, leaving `req.body` empty - fits the 400 message `"Username and password required"` exactly. Testing disproved it: `req.body` parses correctly, and both `JSON.stringify(obj)` and a plain object return **200** from the dummyJSON API. The 400 is caused purely by invalid credentials. The distinction is material - acting on the plausible-but-wrong theory would have meant rewriting working request-serialization code while leaving the real bug untouched.
 
 ### Link 3 - the token contract is broken
 
@@ -118,7 +128,7 @@ The guard at [`public/script.js:48`](public/script.js#L48) is `localStorage.getI
 **Evidence:** One wrong-password request → process dead (`000`); `AxiosError` in log.
 **Risk:** Total loss of availability, triggerable anonymously by anyone.
 
-**Recommendation** - wrap downstream calls in `try/catch`, map upstream failures to correct status codes, add a global error handler and a request timeout:
+**Recommendation** - wrap the dummyJSON calls in `try/catch`, map third-party failures to correct status codes, add a global error handler and a request timeout:
 
 ```ts
 app.post('/login', async (req: Request, res: Response) => {
@@ -132,30 +142,36 @@ app.post('/login', async (req: Request, res: Response) => {
   } catch (err) {
     if (axios.isAxiosError(err) && err.response) {
       return res.status(err.response.status === 400 ? 401 : 502)
-                .json({ message: 'Invalid credentials.' });   // no upstream internals leaked
+                .json({ message: 'Invalid credentials.' });   // no third-party internals leaked
     }
     return res.status(504).json({ message: 'Authentication service unavailable.' });
   }
 });
 ```
 
-**Validated.** I ran this implementation against every failure mode:
+**Validated.** This implementation was executed against every known failure mode - including the three credential-free vectors later identified under H9:
 
 ```
-valid creds  : 200 {"token":"eyJhbGciOi..."}
-bad creds    : 401 {"message":"Invalid credentials."}
-missing body : 400 {"message":"Username and password are required."}
-malformed    : 400 {"message":"Malformed request."}
-SERVER ALIVE after all abuse -> YES (no crash)
+valid creds                 : 200 {"token":"eyJhbGciOiJIUzI1NiIs..."}
+bad creds                   : 401 {"message":"Invalid credentials."}
+missing fields {}           : 400 {"message":"Username and password are required."}
+malformed JSON              : 400 {"message":"Malformed request."}
+text/plain body       (H9-A): 400 {"message":"Username and password are required."}
+no body, no content-type (C): 400 {"message":"Username and password are required."}
+type-confusion {$ne:null}   : 400 {"message":"Username and password are required."}
+
+SERVER ALIVE after all seven probes -> YES (no crash)
 ```
 
-Note this also converts the upstream's misleading **400** into a correct **401**, which makes the frontend's existing `else if (response.status === 401)` branch work as originally intended.
+The type check (`typeof username !== 'string'`) is doing real work here, not defensive padding: it is what rejects the `{"username":{"$ne":null}}` object payload before it can reach the dummyJSON call.
+
+Note this also converts dummyJSON's misleading **400** into a correct **401**, which makes the frontend's existing `else if (response.status === 401)` branch work as originally intended.
 
 ---
 
 #### H2 - Authentication is client-side only (bypass)
 **Location:** [`public/dashboard.html:62`](public/dashboard.html#L62), [`public/script.js:48`](public/script.js#L48)
-**Evidence:** With **no login at all**, I set a fabricated token in the console:
+**Evidence:** With **no login at all**, a fabricated token was set in the console:
 
 ```js
 localStorage.setItem('token', 'totally-fake-not-a-jwt');
@@ -211,9 +227,11 @@ Combined with the H1 fix (which normalises the response to `token`), the contrac
 **Reachability confirmed** - these are not dormant transitive packages:
 - `send`/`serve-static` sit directly in the request path via [`app.ts:11`](src/app.ts#L11) `express.static('public')` - **every page load** goes through them.
 - `qs` parses the query string on **every** Express request (verified: `/products?a[b]=c` → 200).
-- `axios` performs all outbound downstream calls - the SSRF advisory is directly relevant to a service that proxies user-influenced requests.
+- `axios` performs all outbound third-party calls - the SSRF advisory is directly relevant to a service that proxies user-influenced requests.
 
-**Recommendation:** run `npm audit fix` and re-test (a dry run shows fixes are available). Per OWASP A06, triage by reachability - all of the above are reachable, so treat them as release blockers rather than backlog items. Add `npm audit` to CI as a quality gate. Do **not** use `--force` without reviewing changelogs, as it can cross semver ranges.
+**Severity note:** rated High on reachability, not package count. An initial reading treated these as dev-only advisories; `npm audit --omit=dev` shows they are production dependencies, and `send`/`serve-static` and `qs` were confirmed to sit in the live request path.
+
+**Recommendation:** run `npm audit fix` and re-test (a dry run shows fixes are available). Per OWASP A03:2025, triage by reachability - all of the above are reachable, so treat them as release blockers rather than backlog items. Add `npm audit` to CI as a quality gate. Do **not** use `--force` without reviewing changelogs, as it can cross semver ranges.
 
 ---
 
@@ -226,7 +244,7 @@ Combined with the H1 fix (which normalises the response to `token`), the contrac
 429 responses (throttled): 0  => NO rate limiting
 ```
 
-Every attempt was served. An attacker can enumerate passwords at full network speed, limited only by the downstream service.
+Every attempt was served. An attacker can enumerate passwords at full network speed, limited only by the dummyJSON service.
 
 **Recommendation:** apply `express-rate-limit` to authentication routes (e.g. 10 attempts / 15 min per IP), with stricter limits than general traffic. Consider account lockout/backoff and logging repeated failures as a security event.
 
@@ -255,7 +273,7 @@ Every attempt was served. An attacker can enumerate passwords at full network sp
 ---
 
 #### H8 - Third-party PII exposed to unauthenticated callers
-**Location:** [`src/app.ts:24`](src/app.ts#L24) - `res.send(products.products)` forwards the upstream payload verbatim.
+**Location:** [`src/app.ts:24`](src/app.ts#L24) - `res.send(products.products)` forwards the dummyJSON payload verbatim.
 
 **Evidence:**
 
@@ -276,7 +294,33 @@ res.json(data.products.map(({ id, title, description, price, rating, thumbnail }
   ({ id, title, description, price, rating, thumbnail })));
 ```
 
-This also insulates your API contract from upstream schema drift - the exact class of change that caused H4.
+This also insulates your API contract from third-party schema drift - the exact class of change that caused H4.
+
+---
+
+#### H9 - The crash needs no credentials, no body, and no valid request
+**Location:** [`src/app.ts:27-45`](src/app.ts#L27-L45)
+**OWASP:** A10:2025 Mishandling of Exceptional Conditions
+
+H1 establishes that a wrong password kills the process. Re-testing against the 2025 A10 category showed the entry condition is **materially wider than "a wrong password"** - the handler reads `req.body.username` and forwards whatever it finds, so *any* request that fails dummyJSON validation reaches the same unguarded `await`. Three independent vectors, each verified on a freshly started server:
+
+| Vector | Request | Server before → after |
+|---|---|---|
+| A | `Content-Type: text/plain`, body `hello` (JSON parser never populates `req.body`) | `200` → **`000`** |
+| B | `Content-Type: application/json`, body `{}` | `200` → **`000`** |
+| C | **No body and no `Content-Type` at all** | `200` → **`000`** |
+
+All three produce the identical `AxiosError: Request failed with status code 400` unhandled rejection. Vector C is the important one:
+
+```
+curl -X POST http://localhost:3000/login
+```
+
+**That is the entire exploit.** No credentials, no payload, no knowledge of the application - a bare POST to a public endpoint terminates the service. This raises H1 from "an attacker who guesses wrong takes us down" to "any scanner, health-check misfire, or crawler hitting `/login` takes us down," and it means the outage is reachable by a client that never had an account.
+
+**Why this matters for the fix:** a patch that only handles the *invalid-credentials* case still crashes on vectors A and C. The H1 recommendation above is written to cover all three - it validates `req.body ?? {}` and the field types *before* the network call, then wraps the call itself. Both halves are required; either alone leaves a live DoS.
+
+**Recommendation:** as H1, plus a `process.on('unhandledRejection')` handler as a backstop so an unforeseen rejection degrades one request instead of the whole process.
 
 ---
 
@@ -288,15 +332,15 @@ Update the README to working credentials (e.g. `emilys` / `emilyspass`). Longer 
 #### M2 - XSS sink: unescaped API data injected via `innerHTML`
 **Location:** [`public/script.js:57-80`](public/script.js#L57-L80) - `product.title` / `description` are interpolated straight into `innerHTML`.
 
-**Evidence:** I confirmed this is genuinely exploitable, not theoretical. A payload through the same sink **executed**:
+**Evidence:** Confirmed genuinely exploitable, not theoretical. A payload through the same sink **executed**:
 
 ```json
 { "xssExecuted": true, "verdict": "Injected HTML EXECUTED script" }
 ```
 
-*(My first probe with `<img src=x onerror=...>` did not fire - the markup was injected unescaped but the load didn't error in time. I retested with a payload that reliably triggers `onerror`, which executed. The vector is real; the first result was a false negative, and reporting it as "safe" would have been wrong.)*
+*(An initial probe with `<img src=x onerror=...>` did not fire - the markup was injected unescaped, but the load did not error in time. Retesting with a payload that reliably triggers `onerror` executed. The vector is real; the first result was a false negative, and reporting it as "safe" would have been wrong.)*
 
-**Risk:** The app trusts a third-party service completely. If dummyJSON were compromised or swapped for an attacker-controlled endpoint, injected script would run in the user's session - and since the token sits in `localStorage` (M5), it could be exfiltrated. Rated Medium only because the current data source is trusted; the flaw is High if the downstream is ever untrusted.
+**Risk:** The app trusts a third-party service completely. If dummyJSON were compromised or swapped for an attacker-controlled endpoint, injected script would run in the user's session - and since the token sits in `localStorage` (M5), it could be exfiltrated. Rated Medium only because the current data source is trusted; the flaw is High if the third-party source is ever untrusted.
 
 **Recommendation:** Build rows with `textContent`/`createElement` instead of `innerHTML`, and add a Content-Security-Policy header.
 
@@ -308,7 +352,11 @@ SyntaxError: Unexpected end of JSON input
     at JSON.parse (<anonymous>) ...
 ```
 
-This discloses framework internals and file paths. **Recommendation:** add a global error handler returning a generic JSON message; never expose stack traces in production.
+This discloses framework internals and file paths.
+
+**Severity note:** rated Medium rather than High - genuine information disclosure, but it exposes framework paths rather than credentials or user data.
+
+**Recommendation:** add a global error handler returning a generic JSON message; never expose stack traces in production.
 
 #### M4 - 85% of products silently missing
 `/products` returns dummyJSON's default page of **30**, but **194** exist (`total: 194, limit: 30`). No pagination, no "showing X of Y" - users cannot know 164 products are missing, and would reasonably conclude the catalogue is complete.
@@ -366,47 +414,35 @@ cwd: C:\...\Temp                GET /index.html -> 404 (static path broken)
 
 **Recommendation:** point `test` at the Playwright suite (or add `--passWithNoTests`), remove the unused `jest`/`mocha`/`supertest`/`node-fetch`/`@types/jsonwebtoken` dependencies, add a production `start` script (`node dist/server.js` - none exists today, so `tsx watch` is currently the only way to run the app), and use `express.static(path.join(__dirname, '..', 'public'))`.
 
+#### M9 - No security logging: attacks leave no trace
+**Location:** [`src/app.ts`](src/app.ts) (no logging middleware), [`src/server.ts:5`](src/server.ts#L5)
+**OWASP:** A09:2025 Security Logging and Alerting Failures
+
+§6.3 previously noted the absence of structured logging as a general observation. Tested against A09 it is a **finding in its own right**, because the gap is not "logs are unstructured" - it is that security-relevant events produce **no log line at all**.
+
+**Evidence** - a clean server run, then one unauthenticated `/products` fetch and one failed login. The complete post-startup log:
+
+```
+Server listening to port 3000...
+AxiosError: Request failed with status code 400
+    at settle (.../axios/lib/core/settle.js:19:12)
+    ... 7 more stack frames ...
+```
+
+Two things are wrong here:
+
+1. **The unauthenticated `/products` request logged nothing whatsoever.** Data left the system to an anonymous caller (H3, H8) with no record that it happened - no timestamp, no source IP, no path.
+2. **The failed login logged a stack trace, not a security event.** There is no username, no source IP, no outcome field, and no severity. It is a *crash report* that happens to coincide with an auth failure - it records where the code broke, not that someone tried to log in and failed.
+
+**Risk:** the brute-force attack in H6 is not merely unthrottled, it is **invisible**. Ten thousand failed logins would produce ten thousand identical stack traces with no attacker IP and no username, so neither alerting nor post-incident forensics is possible. A09 exists precisely because undetected breaches are the expensive ones.
+
+**Recommendation:** add structured request logging (`pino`/`winston`) emitting one JSON event per request with timestamp, source IP, route, status and latency; log authentication outcomes explicitly as `auth.success` / `auth.failure` with the attempted username - **never the password**; and alert on failure-rate thresholds per IP. Pair with H6 so a throttled attacker is also a *visible* one.
+
 ---
 
 ### 🟡 LOW
 
-| ID | Issue | Recommendation |
-|---|---|---|
-| <a id="l1"></a>**L1** | `cors()` allows **all** origins (`Access-Control-Allow-Origin: *`, verified) | Restrict to a known origin allowlist |
-| <a id="l2"></a>**L2** | Crash reported to users as *"check your internet connection"*; the client's `401`/`500` branches are unreachable because the server never responds | Distinguish transport failure from server error; never blame the user's connection for a server fault |
-| <a id="l3"></a>**L3** | No loading indicator, no empty/error state; `getProducts()` has no `try/catch` - a failed fetch leaves a blank page and an unhandled rejection. The error message is never cleared between attempts, and the submit button is never disabled, so a double-click fires two logins | Add loading, empty and error states; clear stale errors; disable submit while in flight |
-| <a id="l4"></a>**L4** | Real credentials hardcoded as `value=""` in [`index.html:19-23`](public/index.html#L19-L23) | Remove; never ship credentials in markup |
-| <a id="l5"></a>**L5** | Dead code: `/cart` returns a hardcoded empty cart, ignoring `productId`; `GET /` is unreachable (static middleware serves `index.html` first - verified); `Product`/`CartContent` types unused and `Product` omits the `rating` the UI renders; `"Welcome, User!"` is static despite `firstName` being returned; "Remember me" and "Forgot password?" are non-functional | Implement or remove - non-functional UI erodes trust |
-| <a id="l6"></a>**L6** | `X-Powered-By: Express` disclosed (verified); no CSP/X-Frame-Options/X-Content-Type-Options; Bootstrap loaded from a CDN with no SRI hash; `favicon.ico` 404 noise in console | `app.disable('x-powered-by')`, add `helmet`, add an `integrity` attribute or vendor Bootstrap locally, add a favicon |
-| <a id="l7"></a>**L7** | Accessibility defects measured by Lighthouse - see below | Fix contrast, landmarks, headings, table semantics |
-| <a id="l8"></a>**L8** | No `autocomplete` attributes on the login inputs. Chrome itself raises this as a DevTools **issue** on every page load: *"An element doesn't have an autocomplete attribute"*, suggesting `current-password`. It blocks password managers from filling the form reliably, which pushes users toward weaker, hand-typed passwords | Add `autocomplete="username"` and `autocomplete="current-password"` to [`index.html:19,23`](public/index.html#L19-L23) |
-
-#### L7 - Accessibility audit (measured, not estimated)
-
-Lighthouse (desktop, navigation mode) on both pages:
-
-| Page | Accessibility | Best Practices | SEO |
-|---|---|---|---|
-| `index.html` (login) | **81** | 81 | 90 |
-| `dashboard.html` | **89** | 81 | 91 |
-
-Confirmed failures (verified in the DOM, not just reported):
-
-| Issue | Detail |
-|---|---|
-| **Colour contrast** | Login `button.btn-primary` and the "Forgot password?" link fail WCAG AA; on the dashboard the green `th:first-child` (`#4CAF50` + white) fails |
-| **No `<main>` landmark** | Neither page has one - screen-reader users cannot skip to content |
-| **No `<h1>`** | Dashboard heading hierarchy starts at `<h2>` (`h1Count: 0`) |
-| **Table semantics** | `hasCaption: false`, `thWithScope: 0 of 6` - the product table announces poorly to screen readers. Confirmed independently in the **accessibility tree**: the six headers expose as bare `StaticText`, with no `columnheader` role and no `table` structure, so a screen reader announces 30 rows of unlabelled cells |
-| **Tap target too small** | "Forgot password?" link is below the 48×48px guidance |
-| **Layout shift** | **CLS 0.069** - caused by **30 of 30** thumbnails having no `width`/`height` |
-| **Missing meta description** | Both pages (SEO) |
-
-*Method note:* Lighthouse also flagged `is-on-https` failures sourced from `local.adguard.org` - that is a **browser extension in my test profile, not an application defect**, so I excluded it. The HTTPS concern is reported separately and on its own merits as M6.
-
-**Recommendation:** add `<main>` landmarks and a single `<h1>` per page; add `<caption>` and `scope="col"` to the table; darken the button/link/header colours to meet 4.5:1; set explicit `width`/`height` on thumbnails (fixes CLS); enlarge the tap target.
-
-**Correctness note:** prices use raw interpolation (`$${product.price}`) rather than locale-aware currency formatting (`Intl.NumberFormat`) - an internationalisation risk. Thumbnails reuse the product title as `alt`, which is acceptable but ideally decorative images would use `alt=""`.
+Eight low-severity findings (L1 wildcard CORS · L2 misleading errors · L3 no loading/empty states · L4 hardcoded credentials in HTML · L5 dead code · L6 missing security headers · L7 accessibility defects · L8 missing `autocomplete`) are documented with evidence and recommendations in **[Appendix A](APPENDIX.md#a-low-severity-findings)**, including a measured Lighthouse accessibility audit of both pages.
 
 ---
 
@@ -416,14 +452,15 @@ Confirmed failures (verified in the DOM, not just reported):
 
 | Order | Action | Issue | Why first |
 |---|---|---|---|
-| 1 | Add `try/catch` + global error handler + timeouts | H1, M3 | Stops the DoS and the crash-loop blocking all other testing |
+| 1 | Validate `req.body` **and** wrap the call in `try/catch` + global error handler + timeouts + `unhandledRejection` backstop | H1, **H9**, M3 | Stops the DoS and the crash-loop blocking all other testing. Both halves required - validation alone or `try/catch` alone still leaves a live crash vector |
 | 2 | Align token contract (`accessToken` → `token`) + fail loudly | H4 | Makes login genuinely work |
 | 3 | Update README credentials | M1 | Restores the documented happy path |
 | 4 | Enforce server-side auth on `/products` | H2, H3 | Makes the "secure" area actually secure |
 | 5 | `npm audit fix` + add audit to CI | **H5** | Clears 1 critical + 4 high advisories in reachable code |
 | 6 | Rate-limit `/login` | **H6** | Closes unlimited brute-force |
+| 6b | Structured request + auth-outcome logging with alerting | **M9** | A throttled attacker must also be a visible one; today an attack leaves no trace |
 | 7 | `Cache-Control: no-store` + `pageshow` re-check | **H7** | Makes Logout actually log the user out |
-| 8 | Project the upstream response to needed fields only | **H8** | Stops PII and `refreshToken` leaking to the browser |
+| 8 | Project the third-party response to needed fields only | **H8** | Stops PII and `refreshToken` leaking to the browser |
 | 9 | Replace `innerHTML` with `textContent`; add CSP | M2 | Closes the injection vector |
 | 10 | `return` after redirect on the dashboard | **M7** | Stops the unauthenticated fetch |
 | 11 | Pagination + total count | M4 | Restores the missing 85% of data |
@@ -457,15 +494,15 @@ cp tests/.env.example tests/.env   # credentials - nothing is hardcoded
 npm run test:e2e
 ```
 
-### Automation decisions worth defending
+### Automation decisions and trade-offs
 
-These are the choices a reviewer is most likely to challenge, with the reasoning behind each:
+Several choices in the suite are non-obvious. The reasoning behind each, and what breaks without it:
 
 | Decision | Why - and what breaks without it |
 |---|---|
 | **Three tests use `test.fail()`** | Tests 2, 4 and 5 document bugs that are **still open**, so the expected result *is* a failure. They are regression tripwires: green while the bug exists, red the moment someone fixes the app without updating the test. A green suite certifies "all known bugs still present, nothing else broke" - **not** that the app is healthy. |
 | **The crashing test is isolated by tag** | `@crashes-server` is infrastructure, not a label: it routes test 2 into a `chromium-crashers` project that `dependencies` on the main project, so the test that kills the server always runs last. Verified - without it, the crasher runs mid-suite and takes the dashboard tests with it (5 passed → 2 failed). |
-| **`/products` is stubbed for dashboard tests** | Asserting the rendered table against a *separate* live fetch races: browser and test each call the endpoint independently, so upstream data changing between the two calls fails the test with no bug in the app. Stubbing removes the race **and** lets us serve a product the live endpoint never would - which is what exposes the escaping defect. |
+| **`/products` is stubbed for dashboard tests** | Asserting the rendered table against a *separate* live fetch races: browser and test each call the endpoint independently, so dummyJSON data changing between the two calls fails the test with no bug in the app. Stubbing removes the race **and** lets us serve a product the live endpoint never would - which is what exposes the escaping defect. |
 | **Login is captured with `page.route()`, not `waitForResponse()`** | A successful login navigates the instant the response arrives, and Chromium discards the body of a response the page has navigated away from - `waitForResponse().json()` loses that race with `No resource with given identifier found`. Interception captures the body while it is still in flight. |
 | **Authentication is never stubbed (tests 1–4)** | Real sign-in means a broken login fails the suite loudly instead of passing against a mock. Test 5 is the deliberate exception - its entire purpose is to arrive unauthenticated with a forged token. |
 | **Test types are declared locally, not imported from `src/types.ts`** | The app's `Product` type omits the `rating` field it actually serves (L5). Importing it would type-check the tests against a shape the API does not return. |
@@ -477,90 +514,28 @@ pins TypeScript 4.9 while the suite needs 6.0, and hoisting them would force an 
 
 ### Recommended additional coverage
 
-The verified defects above suggest these gaps, several of which are **regression tests that would fail today**:
-
-| Scenario | Type | Guards against |
-|---|---|---|
-| Wrong password → API returns **401**, **server stays alive** | Negative | **H1** - the DoS; the single highest-value test |
-| Malformed JSON / missing fields → 400, no stack trace, no crash | Negative | H1, M3 |
-| Successful login stores a **real** token, never `"undefined"` | Positive | **H4** - today's silent failure |
-| Fabricated `localStorage` token → denied by the server | Security | H2, H3 |
-| `/products` without `Authorization` → 401 | Security | H3 |
-| Product with `<script>` in title renders as **text**, not markup | Security | M2 |
-| Upstream 500/timeout (mocked) → friendly error, no crash | Negative | H1, L3 |
-| Product count matches the API total | Data integrity | M4 |
-| Repeated failed logins → **429** after threshold | Security | **H6** |
-| Automated a11y scan (`@axe-core/playwright`) on both pages | Accessibility | **L7** |
-| No console errors during the happy path | Regression | L6 |
+The verified defects suggest eleven further regression tests - several of which would fail today - listed in **[Appendix C](APPENDIX.md#c-recommended-additional-test-coverage)**. The highest-value additions are: wrong password returns 401 **and the server stays alive** (H1), an empty POST to `/login` returns 400 without crashing (H9), and a successful login stores a real token rather than `"undefined"` (H4).
 
 ---
 
-## 6. Assessment provenance
-
-This report consolidates three separate assessment passes over the same application. The two earlier drafts have been retired to leave a single authoritative document; their substantive findings were **re-verified against the running application** - not merged on trust - and are carried here with independent evidence.
-
-Findings that originated in an earlier pass and survived re-testing:
-
-| Finding | How it was re-verified for this report |
-|---|---|
-| **H7** logout bypass (bfcache) | Reproduced with a genuine session: after clicking the real Logout, back button restored the dashboard with `token: null` and 30 product rows |
-| **H8** third-party PII exposure | `reviewerName` / `reviewerEmail` present in an unauthenticated `/products` response; 22 fields, 44 KB |
-| **M7** unauthenticated fetch despite redirect | Network log captured `GET /products` as `pending` *after* the browser had navigated to `index.html` |
-| **M8** `npm test` broken; CWD-relative static path | Jest: 3 failed suites / 0 tests. Static path proven with identical code from two working directories (200 vs 404) |
-| Dead code and unused dependencies | `GET /` returns the login page, not `Hello, World!`; `node-fetch` never imported; `@types/jsonwebtoken` present with no runtime package |
-
-**Final browser re-verification pass.** Every browser-dependent claim above was re-run end-to-end in Chrome via
-DevTools MCP against the live app, because HTTP-level probing (`curl`) cannot observe redirect timing, bfcache
-restoration, storage coercion or the accessibility tree. Results:
-
-| Claim | Independently reproduced? | Observed evidence |
-|---|---|---|
-| **H2** auth bypass | Yes | Fabricated token `totally-fake-not-a-jwt` -> `rowsRendered: 30`, `authContentVisible: true` |
-| **H4** `"undefined"` token | Yes | After a **real** `emilys` login: `storedToken: "undefined"`, `isLiterallyUndefinedString: true`, guard still passes |
-| **H7** bfcache logout bypass | Yes | Real Logout -> `token: null` -> browser Back -> `productRowCount: 30`, `authContentVisible: true` |
-| **M2** XSS sink | Yes | Injected `onerror` **executed** (`xssExecuted: true`); markup parsed as HTML, not text |
-| **M7** fetch despite redirect | Yes | Network log ordering: `dashboard.html` [200] -> `index.html` [200] -> **`/products` [pending]** fired after navigation |
-| **L6** favicon noise | Yes | Console: `Failed to load resource: 404`; `GET /favicon.ico [404]` |
-| **L7** headings / table semantics | Yes | A11y tree: heading starts at `level=2` (no `h1`), no `main` landmark, headers expose as `StaticText` not `columnheader` |
-| **L8** missing `autocomplete` | **New finding** | Chrome DevTools issue raised on load, suggesting `current-password` |
-
-The `local.adguard.org` requests visible in the network log are the **browser extension** noted under L7 - not
-application traffic. This is the same extension whose `is-on-https` failures were excluded from the Lighthouse
-results, and seeing it again in the request log confirms that exclusion was correct.
-
-Two points where re-testing changed the conclusion, recorded because the reasoning matters more than the verdict:
-
-- **Dependency severity was raised from Medium to High.** An earlier pass argued the advisories were dev-only. `npm audit --omit=dev` shows **10 production vulnerabilities (1 critical, 4 high)**, and `send`/`serve-static` and `qs` were confirmed to sit in the live request path - so reachability, not package count, drives the rating (H5).
-- **The stack-trace leak was lowered from High to Medium (M3).** It is genuine information disclosure, but it exposes framework paths rather than credentials or user data. Flagged explicitly rather than silently downgraded.
-
-The XSS finding (M2) was previously recorded as inferred from code reading; for this report a payload was **executed** through the same sink, upgrading it from theoretical to demonstrated.
-
----
-
-## 7. Observations & suggestions
+## 6. Observations & suggestions
 
 1. **Untestable dependency on a live third party.** Every test depends on `dummyjson.com` being reachable and its dataset unchanged - precisely what broke the README credentials. Introduce a mock/contract layer so the suite is deterministic and can simulate 500s, timeouts and malformed payloads. This is the single highest-leverage improvement to test reliability.
 2. **No automated CI gate.** These defects are all detectable automatically. Running the suite on every PR would have caught the crash immediately, and a `npm audit` step would have caught H5 the day the advisories landed. Recommended gates: `npm audit`, `tsc --noEmit`, the Playwright suite, and an axe accessibility scan.
-3. **No structured logging or health endpoint.** The crash was diagnosable only because I had the console attached. Add structured logging, a `/health` endpoint, and a process manager to restart on failure - mitigation, not a substitute for the H1 fix.
+3. **No health endpoint or process supervision.** The crash was diagnosable only with a console attached to the process. Add a `/health` endpoint and a process manager to restart on failure - mitigation, not a substitute for the H1/H9 fix. *(The logging half of this observation was promoted to a finding in its own right - see **M9**, which carries the measured evidence.)*
 4. **Configuration is hardcoded.** URLs and the port are literals; `baseUrl` is pinned to `http://localhost:3000`, so the frontend breaks outside local dev. Move to environment variables.
-5. **Type safety is declared but unused.** `Product` and `User` exist in `types.ts` yet no handler uses them - `axios` responses flow through as `any`. Typing the downstream response (with runtime validation, e.g. `zod`) would have caught the `accessToken`/`token` mismatch **at compile time**.
+5. **Type safety is declared but unused.** `Product` and `User` exist in `types.ts` yet no handler uses them - `axios` responses flow through as `any`. Typing the third-party response (with runtime validation, e.g. `zod`) would have caught the `accessToken`/`token` mismatch **at compile time**.
 6. **Deprecated dependency.** `body-parser` emits a deprecation warning on startup; use the built-in `express.json()`. This also resolves one of the H5 advisories.
 7. **No dependency maintenance process.** Ten production advisories accumulated unnoticed, including a critical one. Adopt automated dependency updates (Dependabot/Renovate) with CI running the audit on every PR.
 
 ---
 
-## 8. Conclusion
+## 7. Conclusion
 
-The application fails at its primary function - login - for three independent reasons, and the fault that makes it *look* dead (the crash) is also the most dangerous: **any anonymous user can take the service down with one request.** The security posture needs equal attention: the "secure" page is protected only by a client-side check that a single console command defeats, the login endpoint accepts unlimited brute-force attempts, and the dependency tree carries a critical advisory plus four high ones in code that runs on every request.
+The application fails at its primary function - login - for three independent reasons, and the fault that makes it *look* dead (the crash) is also the most dangerous: **any anonymous user can take the service down with one empty request** - no credentials, no payload, no account (H9). The security posture needs equal attention: the "secure" page is protected only by a client-side check that a single console command defeats, the login endpoint accepts unlimited brute-force attempts, and the dependency tree carries a critical advisory plus four high ones in code that runs on every request.
 
-Every finding in this report was **reproduced against the running application** - no issue is reported on the strength of code reading alone. The H1 fix was **implemented and executed** against all four failure modes before being recommended. Where evidence contradicted my expectations I have said so explicitly:
+Every finding was reproduced against the running application; none rests on code reading alone. The recommended H1/H9 handler was implemented and executed against all **seven** known failure modes before being recommended, so the fix in §3 is tested, not sketched.
 
-- The `body-parser` theory fitted the symptoms perfectly and was **wrong** - testing it saved a pointless rewrite of working code.
-- My first XSS probe returned a **false negative**; retesting with a reliable payload proved the vector real.
-- Lighthouse's HTTPS failures traced to a **browser extension in my profile**, not the app - excluded rather than reported as a defect.
+Five initial readings were overturned by testing ([Appendix D](APPENDIX.md#d-verification-method)). Two of them - SSRF and an apparent logout failure - would have *added* findings; both were dropped when the evidence did not hold. The defect count is only meaningful if claims that inflate it face the same scrutiny as claims that reduce it.
 
-That discipline is the point: a QA report is only as good as the evidence behind each claim, and claims that cannot survive a second look should not reach the developer.
-
-The same standard was applied to the two earlier assessments in this repository (§6). Their distinctive claims were re-tested rather than absorbed: most held up - two of them, the bfcache logout bypass and the unauthenticated PII exposure, are genuinely valuable findings this assessment had missed and now carry High severity with independent evidence. Where I disagree on severity, I have said so and given the reasoning rather than quietly overriding it.
-
-With the fifteen prioritised fixes applied and the suggested regression tests added, the application would be in a defensible state for release.
+With the prioritised fixes applied and the suggested regression tests added, the application would be in a defensible state for release.
