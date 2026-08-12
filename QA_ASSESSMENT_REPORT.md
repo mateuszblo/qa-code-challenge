@@ -496,7 +496,7 @@ npm run test:e2e
 
 ### Automation decisions and trade-offs
 
-These are the choices a reviewer is most likely to challenge, with the reasoning behind each:
+Several choices in the suite are non-obvious. The reasoning behind each, and what breaks without it:
 
 | Decision | Why - and what breaks without it |
 |---|---|
