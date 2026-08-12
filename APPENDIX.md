@@ -40,7 +40,7 @@ Confirmed failures (verified in the DOM, not just reported):
 | **Colour contrast** | Login `button.btn-primary` and the "Forgot password?" link fail WCAG AA; on the dashboard the green `th:first-child` (`#4CAF50` + white) fails |
 | **No `<main>` landmark** | Neither page has one - screen-reader users cannot skip to content |
 | **No `<h1>`** | Dashboard heading hierarchy starts at `<h2>` (`h1Count: 0`) |
-| **Table semantics** | `hasCaption: false`, `thWithScope: 0 of 6` - the product table announces poorly to screen readers. Confirmed independently in the **accessibility tree**: the six headers expose as bare `StaticText`, with no `columnheader` role and no `table` structure, so a screen reader announces 30 rows of unlabelled cells |
+| **Table semantics** | `hasCaption: false`, `thWithScope: 0 of 6`. The table's *structure* is sound - the accessibility tree exposes `table` › `rowgroup` › `row` › 6 × `columnheader`, because the markup uses real `<th>` elements - but with no `<caption>` and no `scope="col"`, header-to-cell association is left to the browser's heuristics rather than stated, which degrades navigation in screen readers that rely on explicit scoping |
 | **Tap target too small** | "Forgot password?" link is below the 48×48px guidance |
 | **Layout shift** | **CLS 0.069** - caused by **30 of 30** thumbnails having no `width`/`height` |
 | **Missing meta description** | Both pages (SEO) |
@@ -69,7 +69,7 @@ Every category was reviewed explicitly, including those where nothing was found 
 | **A03** | Software Supply Chain Failures | 🔴 **Fail** | H5, L6 | 10 production advisories (1 critical, 4 high); Bootstrap loaded from CDN with **no SRI hash** |
 | **A04** | Cryptographic Failures | 🔴 **Fail** | M5, M6 | Credentials posted over plain HTTP; no TLS config in the codebase; token in `localStorage` |
 | **A05** | Injection | 🔴 **Fail** | M2 | XSS payload **executed** through the `innerHTML` sink (`xssExecuted: true`) |
-| **A06** | Insecure Design | 🔴 **Fail** | H6, H8, M4 | No rate limit by design; proxy forwards downstream payload verbatim including third-party PII and `refreshToken` |
+| **A06** | Insecure Design | 🔴 **Fail** | H6, H8, M4 | No rate limit by design; proxy forwards the dummyJSON payload verbatim including third-party PII and `refreshToken` |
 | **A07** | Authentication Failures | 🔴 **Fail** | H4, H6, H7 | Unlimited brute-force (12/12 served, zero 429s); token contract broken; logout defeated by Back button |
 | **A08** | Software and Data Integrity Failures | 🟠 **Partial** | L6 | Un-pinned CDN asset with no integrity check. **Contrast:** `package-lock.json` is fully hash-pinned - 476/476 packages carry an `integrity` hash, so the npm supply chain is verified while the browser-side one is not |
 | **A09** | Security Logging and Alerting Failures | 🔴 **Fail** | **M9** | Unauthenticated `/products` fetch logged **nothing**; failed login logged a stack trace with no IP, username or outcome |
@@ -83,7 +83,7 @@ Every category was reviewed explicitly, including those where nothing was found 
 
 **A08 is rated Partial, not Fail,** because the two halves of the integrity story diverge: dependency installs are cryptographically verified (476/476 lockfile entries hashed) while the CDN `<link>` has no `integrity` attribute. Worth noting that the CDN host - `stackpath.bootstrapcdn.com` - belongs to a provider that has since exited the CDN business, so an un-pinned asset is loaded from infrastructure with an uncertain owner. It still returns `200` today; that is exactly the condition under which nobody notices until it serves something else.
 
-**Injection beyond XSS was tested and not found.** There is no database, no shell execution, no file-path handling and no template engine, so SQLi, command injection and path traversal have no surface here. Object-injection into the downstream auth call (`{"username":{"$ne":null}}`) was probed - it does not authenticate, though it does trigger the H9 crash.
+**Injection beyond XSS was tested and not found.** There is no database, no shell execution, no file-path handling and no template engine, so SQLi, command injection and path traversal have no surface here. Object-injection into the dummyJSON auth call (`{"username":{"$ne":null}}`) was probed - it does not authenticate, though it does trigger the H9 crash.
 
 ---
 
@@ -136,13 +136,14 @@ Recorded because they affect how much weight to give the findings, not as narrat
 
 | Initial reading | What testing showed |
 |---|---|
-| `body-parser`'s default export leaves `req.body` empty, causing the 400 | **Wrong.** `req.body` parses correctly; both serialisations return 200 downstream. The 400 is purely invalid credentials. Acting on this would have meant rewriting working code while leaving the real bug (H1) untouched |
+| `body-parser`'s default export leaves `req.body` empty, causing the 400 | **Wrong.** `req.body` parses correctly; both serialisations return 200 from dummyJSON. The 400 is purely invalid credentials. Acting on this would have meant rewriting working code while leaving the real bug (H1) untouched |
 | XSS is not exploitable - first probe did not fire | **False negative.** The first payload's `onerror` did not trigger in time; a reliable payload executed (`xssExecuted: true`). Reporting "safe" would have been wrong (M2) |
 | Lighthouse `is-on-https` failures are an app defect | **Not the app.** Both offending URLs are `local.adguard.org`, a browser extension in the test profile. Excluded; HTTPS reported separately on its own merits (M6) |
 | SSRF is present - an SSRF advisory sits in the dependency tree | **Not an application defect.** Both outbound URLs are hardcoded literals with no user-influenceable host or path. Recorded as a deliberate non-finding; the advisory is a supply-chain issue (H5), not a coding flaw |
 | Logout is broken - clicking it left the page unchanged | **Tooling artifact.** The automation click landed without firing the listener; a directly dispatched click navigated and cleared the token, proving the handler is bound. Not a finding |
+| The product table exposes no `columnheader` roles or `table` structure | **Overstated.** That reading came from a *collapsed* accessibility snapshot, which omits structural roles. The verbose tree shows `table` › `rowgroup` › `row` › 6 × `columnheader` - the markup uses real `<th>` elements. The genuine defect is narrower: no `<caption>` and no `scope="col"` (L7). Caught by the automated suite, whose `getByRole('columnheader')` assertion passes |
 
-The last two matter most: both would have *added* findings to the report. A defect count is only meaningful if the same standard of evidence applies to claims that inflate it as to claims that reduce it.
+The last three matter most: two would have *added* findings, and one overstated the severity of a real one. A defect count is only meaningful if the same standard of evidence applies to claims that inflate it as to claims that reduce it.
 
 ---
 

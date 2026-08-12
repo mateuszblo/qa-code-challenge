@@ -2,7 +2,7 @@
 
 **Project:** QA Code Challenge - login + secure product dashboard
 **Assessed:** 11 August 2026
-**Environment:** Node/Express (`src/`), vanilla JS frontend (`public/`), downstream service `dummyjson.com`
+**Environment:** Node/Express (`src/`), vanilla JS frontend (`public/`), third-party API `dummyjson.com` (the brief's "downstream service")
 **Method:** Static code review + live black-box verification in Chrome (DevTools MCP: Network, Console, a11y tree, `localStorage` inspection) + Lighthouse accessibility/best-practice audits + a category-by-category review against the **OWASP Top 10:2025** (released January 2026) + direct API probing with `curl`/Node. Every browser-dependent finding was re-driven through the real UI in a final pass ([Appendix D](APPENDIX.md#d-verification-method)).
 
 ### Where to find each deliverable
@@ -30,7 +30,7 @@ Behind that single symptom sit **three independent defects**, each sufficient to
 | # | Defect | Effect |
 |---|--------|--------|
 | 1 | Unhandled promise rejection in `/login` | **Server process dies** on any failed login |
-| 2 | README credentials no longer valid downstream | Every documented login attempt fails |
+| 2 | README credentials no longer valid at dummyJSON | Every documented login attempt fails |
 | 3 | Frontend reads `userData.token`; API returns `accessToken` | Stores the string `"undefined"` as the auth token |
 
 Separately, the "secure" area is **not secure**: the product endpoint requires no authentication, and the client-side auth gate is bypassed by typing one line into the browser console.
@@ -93,7 +93,7 @@ A **single unauthenticated HTTP request with a wrong password takes the whole se
 
 ### Link 2 - the credentials are dead
 
-The README's users are rejected by the live downstream service:
+The README's users are rejected by the live dummyJSON service:
 
 | Credentials (source) | Result |
 |---|---|
@@ -103,7 +103,7 @@ The README's users are rejected by the live downstream service:
 
 dummyJSON reset its user dataset; the README was never updated. So the documented happy path **always** triggers the crash in Link 1 - which is why the app appears completely dead rather than merely showing a login error.
 
-> **Discounted hypothesis.** A plausible alternative explanation - that `body-parser`'s default export is `urlencoded`, leaving `req.body` empty - fits the 400 message `"Username and password required"` exactly. Testing disproved it: `req.body` parses correctly, and both `JSON.stringify(obj)` and a plain object return **200** from the downstream API. The 400 is caused purely by invalid credentials. The distinction is material - acting on the plausible-but-wrong theory would have meant rewriting working request-serialization code while leaving the real bug untouched.
+> **Discounted hypothesis.** A plausible alternative explanation - that `body-parser`'s default export is `urlencoded`, leaving `req.body` empty - fits the 400 message `"Username and password required"` exactly. Testing disproved it: `req.body` parses correctly, and both `JSON.stringify(obj)` and a plain object return **200** from the dummyJSON API. The 400 is caused purely by invalid credentials. The distinction is material - acting on the plausible-but-wrong theory would have meant rewriting working request-serialization code while leaving the real bug untouched.
 
 ### Link 3 - the token contract is broken
 
@@ -128,7 +128,7 @@ The guard at [`public/script.js:48`](public/script.js#L48) is `localStorage.getI
 **Evidence:** One wrong-password request → process dead (`000`); `AxiosError` in log.
 **Risk:** Total loss of availability, triggerable anonymously by anyone.
 
-**Recommendation** - wrap downstream calls in `try/catch`, map downstream failures to correct status codes, add a global error handler and a request timeout:
+**Recommendation** - wrap the dummyJSON calls in `try/catch`, map third-party failures to correct status codes, add a global error handler and a request timeout:
 
 ```ts
 app.post('/login', async (req: Request, res: Response) => {
@@ -142,7 +142,7 @@ app.post('/login', async (req: Request, res: Response) => {
   } catch (err) {
     if (axios.isAxiosError(err) && err.response) {
       return res.status(err.response.status === 400 ? 401 : 502)
-                .json({ message: 'Invalid credentials.' });   // no downstream internals leaked
+                .json({ message: 'Invalid credentials.' });   // no third-party internals leaked
     }
     return res.status(504).json({ message: 'Authentication service unavailable.' });
   }
@@ -163,9 +163,9 @@ type-confusion {$ne:null}   : 400 {"message":"Username and password are required
 SERVER ALIVE after all seven probes -> YES (no crash)
 ```
 
-The type check (`typeof username !== 'string'`) is doing real work here, not defensive padding: it is what rejects the `{"username":{"$ne":null}}` object payload before it can reach the downstream call.
+The type check (`typeof username !== 'string'`) is doing real work here, not defensive padding: it is what rejects the `{"username":{"$ne":null}}` object payload before it can reach the dummyJSON call.
 
-Note this also converts the downstream's misleading **400** into a correct **401**, which makes the frontend's existing `else if (response.status === 401)` branch work as originally intended.
+Note this also converts dummyJSON's misleading **400** into a correct **401**, which makes the frontend's existing `else if (response.status === 401)` branch work as originally intended.
 
 ---
 
@@ -227,7 +227,7 @@ Combined with the H1 fix (which normalises the response to `token`), the contrac
 **Reachability confirmed** - these are not dormant transitive packages:
 - `send`/`serve-static` sit directly in the request path via [`app.ts:11`](src/app.ts#L11) `express.static('public')` - **every page load** goes through them.
 - `qs` parses the query string on **every** Express request (verified: `/products?a[b]=c` → 200).
-- `axios` performs all outbound downstream calls - the SSRF advisory is directly relevant to a service that proxies user-influenced requests.
+- `axios` performs all outbound third-party calls - the SSRF advisory is directly relevant to a service that proxies user-influenced requests.
 
 **Severity note:** rated High on reachability, not package count. An initial reading treated these as dev-only advisories; `npm audit --omit=dev` shows they are production dependencies, and `send`/`serve-static` and `qs` were confirmed to sit in the live request path.
 
@@ -244,7 +244,7 @@ Combined with the H1 fix (which normalises the response to `token`), the contrac
 429 responses (throttled): 0  => NO rate limiting
 ```
 
-Every attempt was served. An attacker can enumerate passwords at full network speed, limited only by the downstream service.
+Every attempt was served. An attacker can enumerate passwords at full network speed, limited only by the dummyJSON service.
 
 **Recommendation:** apply `express-rate-limit` to authentication routes (e.g. 10 attempts / 15 min per IP), with stricter limits than general traffic. Consider account lockout/backoff and logging repeated failures as a security event.
 
@@ -273,7 +273,7 @@ Every attempt was served. An attacker can enumerate passwords at full network sp
 ---
 
 #### H8 - Third-party PII exposed to unauthenticated callers
-**Location:** [`src/app.ts:24`](src/app.ts#L24) - `res.send(products.products)` forwards the downstream payload verbatim.
+**Location:** [`src/app.ts:24`](src/app.ts#L24) - `res.send(products.products)` forwards the dummyJSON payload verbatim.
 
 **Evidence:**
 
@@ -294,7 +294,7 @@ res.json(data.products.map(({ id, title, description, price, rating, thumbnail }
   ({ id, title, description, price, rating, thumbnail })));
 ```
 
-This also insulates your API contract from downstream schema drift - the exact class of change that caused H4.
+This also insulates your API contract from third-party schema drift - the exact class of change that caused H4.
 
 ---
 
@@ -302,7 +302,7 @@ This also insulates your API contract from downstream schema drift - the exact c
 **Location:** [`src/app.ts:27-45`](src/app.ts#L27-L45)
 **OWASP:** A10:2025 Mishandling of Exceptional Conditions
 
-H1 establishes that a wrong password kills the process. Re-testing against the 2025 A10 category showed the entry condition is **materially wider than "a wrong password"** - the handler reads `req.body.username` and forwards whatever it finds, so *any* request that fails downstream validation reaches the same unguarded `await`. Three independent vectors, each verified on a freshly started server:
+H1 establishes that a wrong password kills the process. Re-testing against the 2025 A10 category showed the entry condition is **materially wider than "a wrong password"** - the handler reads `req.body.username` and forwards whatever it finds, so *any* request that fails dummyJSON validation reaches the same unguarded `await`. Three independent vectors, each verified on a freshly started server:
 
 | Vector | Request | Server before → after |
 |---|---|---|
@@ -340,7 +340,7 @@ Update the README to working credentials (e.g. `emilys` / `emilyspass`). Longer 
 
 *(An initial probe with `<img src=x onerror=...>` did not fire - the markup was injected unescaped, but the load did not error in time. Retesting with a payload that reliably triggers `onerror` executed. The vector is real; the first result was a false negative, and reporting it as "safe" would have been wrong.)*
 
-**Risk:** The app trusts a third-party service completely. If dummyJSON were compromised or swapped for an attacker-controlled endpoint, injected script would run in the user's session - and since the token sits in `localStorage` (M5), it could be exfiltrated. Rated Medium only because the current data source is trusted; the flaw is High if the downstream is ever untrusted.
+**Risk:** The app trusts a third-party service completely. If dummyJSON were compromised or swapped for an attacker-controlled endpoint, injected script would run in the user's session - and since the token sits in `localStorage` (M5), it could be exfiltrated. Rated Medium only because the current data source is trusted; the flaw is High if the third-party source is ever untrusted.
 
 **Recommendation:** Build rows with `textContent`/`createElement` instead of `innerHTML`, and add a Content-Security-Policy header.
 
@@ -460,7 +460,7 @@ Eight low-severity findings (L1 wildcard CORS · L2 misleading errors · L3 no l
 | 6 | Rate-limit `/login` | **H6** | Closes unlimited brute-force |
 | 6b | Structured request + auth-outcome logging with alerting | **M9** | A throttled attacker must also be a visible one; today an attack leaves no trace |
 | 7 | `Cache-Control: no-store` + `pageshow` re-check | **H7** | Makes Logout actually log the user out |
-| 8 | Project the downstream response to needed fields only | **H8** | Stops PII and `refreshToken` leaking to the browser |
+| 8 | Project the third-party response to needed fields only | **H8** | Stops PII and `refreshToken` leaking to the browser |
 | 9 | Replace `innerHTML` with `textContent`; add CSP | M2 | Closes the injection vector |
 | 10 | `return` after redirect on the dashboard | **M7** | Stops the unauthenticated fetch |
 | 11 | Pagination + total count | M4 | Restores the missing 85% of data |
@@ -502,7 +502,7 @@ Several choices in the suite are non-obvious. The reasoning behind each, and wha
 |---|---|
 | **Three tests use `test.fail()`** | Tests 2, 4 and 5 document bugs that are **still open**, so the expected result *is* a failure. They are regression tripwires: green while the bug exists, red the moment someone fixes the app without updating the test. A green suite certifies "all known bugs still present, nothing else broke" - **not** that the app is healthy. |
 | **The crashing test is isolated by tag** | `@crashes-server` is infrastructure, not a label: it routes test 2 into a `chromium-crashers` project that `dependencies` on the main project, so the test that kills the server always runs last. Verified - without it, the crasher runs mid-suite and takes the dashboard tests with it (5 passed → 2 failed). |
-| **`/products` is stubbed for dashboard tests** | Asserting the rendered table against a *separate* live fetch races: browser and test each call the endpoint independently, so downstream data changing between the two calls fails the test with no bug in the app. Stubbing removes the race **and** lets us serve a product the live endpoint never would - which is what exposes the escaping defect. |
+| **`/products` is stubbed for dashboard tests** | Asserting the rendered table against a *separate* live fetch races: browser and test each call the endpoint independently, so dummyJSON data changing between the two calls fails the test with no bug in the app. Stubbing removes the race **and** lets us serve a product the live endpoint never would - which is what exposes the escaping defect. |
 | **Login is captured with `page.route()`, not `waitForResponse()`** | A successful login navigates the instant the response arrives, and Chromium discards the body of a response the page has navigated away from - `waitForResponse().json()` loses that race with `No resource with given identifier found`. Interception captures the body while it is still in flight. |
 | **Authentication is never stubbed (tests 1–4)** | Real sign-in means a broken login fails the suite loudly instead of passing against a mock. Test 5 is the deliberate exception - its entire purpose is to arrive unauthenticated with a forged token. |
 | **Test types are declared locally, not imported from `src/types.ts`** | The app's `Product` type omits the `rating` field it actually serves (L5). Importing it would type-check the tests against a shape the API does not return. |
@@ -524,7 +524,7 @@ The verified defects suggest eleven further regression tests - several of which 
 2. **No automated CI gate.** These defects are all detectable automatically. Running the suite on every PR would have caught the crash immediately, and a `npm audit` step would have caught H5 the day the advisories landed. Recommended gates: `npm audit`, `tsc --noEmit`, the Playwright suite, and an axe accessibility scan.
 3. **No health endpoint or process supervision.** The crash was diagnosable only with a console attached to the process. Add a `/health` endpoint and a process manager to restart on failure - mitigation, not a substitute for the H1/H9 fix. *(The logging half of this observation was promoted to a finding in its own right - see **M9**, which carries the measured evidence.)*
 4. **Configuration is hardcoded.** URLs and the port are literals; `baseUrl` is pinned to `http://localhost:3000`, so the frontend breaks outside local dev. Move to environment variables.
-5. **Type safety is declared but unused.** `Product` and `User` exist in `types.ts` yet no handler uses them - `axios` responses flow through as `any`. Typing the downstream response (with runtime validation, e.g. `zod`) would have caught the `accessToken`/`token` mismatch **at compile time**.
+5. **Type safety is declared but unused.** `Product` and `User` exist in `types.ts` yet no handler uses them - `axios` responses flow through as `any`. Typing the third-party response (with runtime validation, e.g. `zod`) would have caught the `accessToken`/`token` mismatch **at compile time**.
 6. **Deprecated dependency.** `body-parser` emits a deprecation warning on startup; use the built-in `express.json()`. This also resolves one of the H5 advisories.
 7. **No dependency maintenance process.** Ten production advisories accumulated unnoticed, including a critical one. Adopt automated dependency updates (Dependabot/Renovate) with CI running the audit on every PR.
 
